@@ -1,0 +1,1 @@
+a simple text editor which is cloned from kilo
