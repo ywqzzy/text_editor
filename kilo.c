@@ -4,6 +4,7 @@
 
 #include<unistd.h>
 #include<termios.h>
+#include<fcntl.h>
 #include<sys/ioctl.h>
 #include<ctype.h>
 #include<sys/types.h>
@@ -20,6 +21,7 @@
 #define KILO_TAB_STOP 4
 
 enum editorKey {
+    BACKSPACE = 127,
     ARROW_LEFT = 1000,
     ARROW_RIGHT, 
     ARROW_UP,
@@ -194,6 +196,7 @@ int editorRowCxToRx(erow *row,int cx) {
 
 
 }
+
 void editorUpdateRow(erow *row) {
     int tabs = 0;
     int j;
@@ -237,11 +240,23 @@ void editorAppendRow(char *s, size_t len) {
   E.numrows++;
 }
 
-
-void editorRoewInsertChar(erow *row, int at, int c) {
+void editorRowInsertChar(erow *row, int at, int c) {
     if(at < 0 || at > row->size) at = row->size;
     row->chars = realloc(row->chars, row->size + 2);
-    memmove(&row->chars[at + 1], )
+    memmove(&row->chars[at+1], &row->chars[at], row->size -at + 1);
+    row->size++;
+    row->chars[at] = c;
+    editorUpdateRow(row);
+}
+
+/*** edit operations  ***/
+
+void editorInsertChar(int c) {
+    if(E.cy == E.numrows) {
+        editorAppendRow("", 0);
+    }
+    editorRowInsertChar(&E.row[E.cy],E.cx, c);
+    E.cx++;
 }
 
 /*** file i/o ***/
@@ -256,6 +271,25 @@ void editorRoewInsertChar(erow *row, int at, int c) {
   E.row.chars[linelen] = '\0';
   E.numrows = 1;
 }*/
+char *editorRowToString(int *buflen) {
+    int totlen = 0;
+    int j;
+    for(j = 0; j < E.numrows; j++) {
+        totlen += E.row[j].size + 1;
+    }
+    *buflen = totlen;
+
+    char *buf = malloc(totlen);
+    char *p = buf;
+    for(j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p = '\n';
+        p ++;
+    }
+    return buf;
+}
+
 
 void editorOpen(char *filename) {
     FILE *fp = fopen(filename, "r");
@@ -273,9 +307,31 @@ void editorOpen(char *filename) {
     }
     free(line);
     fclose(fp);
-} 
+}
 
+void editorSave() {
+    if(E.filename == NULL) {
+        return;
+    }
+    int len;
+    char *buf = editorRowToString(&len);
 
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    if(fd != -1) {
+        if(ftruncate(fd, len) != -1) {
+            if(write(fd, buf, len) == len) {
+                close(fd);
+                free(buf);
+                return;
+            }
+        }
+        close(fd);
+    }
+    /*
+    0644 is the standard permissions
+    */
+    free(buf);
+}
 
 /***  append buffer***/
 struct abuf {
@@ -319,7 +375,6 @@ void editorScroll() {
         E.coloff = E.rx - E.screencols + 1;
     }
 }
-
 
 void editorDrawRows(struct abuf *ab) {
   int y;
@@ -420,8 +475,6 @@ void editorSetStatusMessage(const char *fmt, ...) {
     E.statusmsg_time = time(NULL);
 }
 
-
-
 /*** input ***/
 void editorMoveCursor(int key) {
     erow *row = (E.cy >= E.numrows) ? NULL: &E.row[E.cy];
@@ -463,10 +516,16 @@ void editorProcessKeyPress() {
     testC = c;
     switch (c)
     {
+      case '\r':
+        
+        break;
       case CTRL_KEY('q'):
         write(STDOUT_FILENO, "\x1b[2J", 4);
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
+        break;
+      case CTRL_KEY('s'):
+        editorSave();
         break;
       case HOME_KEY:
         E.cx = 0;
@@ -475,6 +534,11 @@ void editorProcessKeyPress() {
         if (E.cy < E.numrows)
           E.cx = E.row[E.cy].size;
         break;
+      case BACKSPACE:
+      case CTRL_KEY('h'):
+      case DEL_KEY:
+        break;
+
       case PAGE_UP:
       case PAGE_DOWN: 
        {
@@ -498,6 +562,13 @@ void editorProcessKeyPress() {
       case ARROW_RIGHT:
         editorMoveCursor(c);
         break;
+      case CTRL_KEY('l'):  // Ctrl-L is traditionally used to refresh the screen in terminal programs.
+      case '\x1b':
+        break;
+
+      default:
+        editorInsertChar(c);
+        break;
     }
 }
 
@@ -520,7 +591,6 @@ void initEditor() {
     E.screenrows -= 2;  // decrement E.screenrows so that editorDrawRows() doesn’t try to draw a line of text at the bottom of the screen so can draw status bar
 
 }
-
 
 int main(int argc, char *argv[]) {
     enableRawMode();
